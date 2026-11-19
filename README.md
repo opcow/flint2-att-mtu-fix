@@ -14,8 +14,11 @@ Symptoms: slow page loads and outright load failures on every device, which go a
 |---|---|---|
 | `network.wan.mtu` | 1492 | Caps the WAN MTU |
 | `network.wan6.mtu` | 1492 | Same for the IPv6 WAN interface |
+| `network.@device[eth1].mtu` | 1492 | MTU on the WAN *device* section. Firmware 4.11+ creates a `config device` section for `eth1`; when it exists, netifd takes the MTU from there and ignores `network.wan.mtu`. The section is looked up by name (and created if missing). |
 | `dhcp.lan.ra_mtu` | 1492 | Advertises the right MTU to LAN clients via Router Advertisements; this also covers QUIC/UDP, which MSS clamping can't. Not exposed in the GL.iNet UI. |
 | `firewall.@zone[wan].mtu_fix` | 1 | TCP MSS clamping on the WAN zone |
+
+After applying settings, the script checks the WAN port's *live* MTU (`/sys/class/net/eth1/mtu`), not just the uci values. If it isn't 1492, it forces it with `ip link set` and logs a warning. This matters because the uci config can look correct while the interface still runs at 1500, and MSS clamping (`--clamp-mss-to-pmtu`) follows the live interface MTU, so clamping silently stops helping too.
 
 The script also makes sure miniupnpd is installed, enabled and running (Tailscale needs UPnP/NAT-PMP for direct connections). It checks that full cone NAT rules are present; if they're missing, it logs a warning, because that can only be re-enabled by toggling it off and on in the GL.iNet UI.
 
@@ -86,5 +89,5 @@ After the settings are applied, reconnect clients so they pick up the new Router
 
 - Tested on a Flint 2 (GL-MT6000) running GL.iNet firmware with IPv6 in Native mode.
 - 1492 is right for AT&T fiber/passthrough. If test-ipv6.com still reports MTU problems, try a lower value.
-- The WAN firewall zone index is looked up by name, not assumed.
-# flint2-att-mtu-fix
+- The WAN firewall zone index and the WAN device section are looked up by name, not assumed.
+- If IPv6 breaks again while `uci get network.wan.mtu` still says 1492, check `ip link show eth1`. A live MTU of 1500 means something is overriding the config (on 4.11 it was the `eth1` device section).
