@@ -22,7 +22,9 @@ After applying settings, the script checks the WAN port's *live* MTU (`/sys/clas
 
 The script also makes sure miniupnpd is installed, enabled and running (Tailscale needs UPnP/NAT-PMP for direct connections). It checks that full cone NAT rules are present; if they're missing, it logs a warning, because that can only be re-enabled by toggling it off and on in the GL.iNet UI.
 
-The script is idempotent. It changes and reloads only what is actually wrong, so it's safe to run at every boot and on a schedule.
+The script is idempotent. It changes and reloads only what is actually wrong, so it's safe to run at every boot, on every WAN reconnect and on a schedule. If it re-applies settings, the resulting network reload fires the hotplug hook once more; that run finds everything correct and stops, so it can't loop.
+
+Run the install steps only once. Running them again adds duplicate lines to `rc.local`, the crontab and `sysupgrade.conf`.
 
 ## Install
 
@@ -38,16 +40,24 @@ Then on the router:
 sed -i 's/\r$//' /root/fix-ipv6-mtu.sh          # strip Windows line endings, if any
 chmod +x /root/fix-ipv6-mtu.sh
 
-# Keep the script, boot hook and schedule across firmware upgrades
-echo /root/fix-ipv6-mtu.sh >> /etc/sysupgrade.conf
-echo /etc/rc.local         >> /etc/sysupgrade.conf
-echo /etc/crontabs/root    >> /etc/sysupgrade.conf
+# Keep the script, hooks and schedule across firmware upgrades
+echo /root/fix-ipv6-mtu.sh            >> /etc/sysupgrade.conf
+echo /etc/rc.local                    >> /etc/sysupgrade.conf
+echo /etc/crontabs/root               >> /etc/sysupgrade.conf
+echo /etc/hotplug.d/iface/99-ipv6fix  >> /etc/sysupgrade.conf
 
 # Run 60 s after every boot
 sed -i '/^exit 0/i (sleep 60; /root/fix-ipv6-mtu.sh) &' /etc/rc.local
 
-# Run every 30 minutes (catches resets that happen without a reboot)
-echo '*/30 * * * * /root/fix-ipv6-mtu.sh >/dev/null 2>&1' >> /etc/crontabs/root
+# Run whenever wan/wan6 comes up (catches resets within seconds of a WAN reconnect)
+cat > /etc/hotplug.d/iface/99-ipv6fix <<'EOF'
+[ "$ACTION" = ifup ] || exit 0
+case "$INTERFACE" in wan|wan6) ;; *) exit 0 ;; esac
+(sleep 5; /root/fix-ipv6-mtu.sh >/dev/null 2>&1) &
+EOF
+
+# Run every 5 minutes (backstop for resets that don't bring the WAN up)
+echo '*/5 * * * * /root/fix-ipv6-mtu.sh >/dev/null 2>&1' >> /etc/crontabs/root
 /etc/init.d/cron restart
 
 # Test run
